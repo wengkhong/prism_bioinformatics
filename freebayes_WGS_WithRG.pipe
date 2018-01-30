@@ -1,0 +1,98 @@
+REFERENCE="/data/share/refs/hs37d5.fa"
+LOG="pipeline.log"
+NUM_CPUS = 32
+MIN_DEPTH = 9
+MIN_QUAL = 30
+
+align = {
+	produce(myfile + ".raw.bam"){
+	exec """
+		/data/apps/bwa mem -R '@RG\tID:$myfile\tLB:LIB1\tSM:$myfile\tPL:ILLUMINA' -t$NUM_CPUS $REFERENCE $input1 $input2 | /data/apps/sambamba view -t$NUM_CPUS -S -f bam /dev/stdin | /data/apps/sambamba sort -t$NUM_CPUS /dev/stdin -o $output.bam
+	"""}
+}
+
+
+markdup = {
+	produce(myfile + ".rmdup.bam"){
+		preserve("*.rmdup.bam"){
+		exec """
+			/data/apps/sambamba markdup -t$NUM_CPUS $input.bam $output.bam
+		"""}
+	}
+}
+
+freebayes = {
+	produce (myfile + "raw.vcf.gz"){
+		preserve("*vcf.gz"){
+		exec """
+			/data/apps/freebayes -f $REFERENCE $input.bam | /data/apps/vcflib/bin/vcfallelicprimitives -kg | /data/apps/vt/vt normalize -q -r $REFERENCE - | /data/apps/vt/vt uniq - | /data/apps/bgzip > $output.gz
+		"""
+		}
+	}
+}
+
+index_vcf = {
+	preserve("*.tbi"){
+	exec """
+		/data/apps/tabix -f $input.gz
+	"""
+	forward input
+	}
+}
+
+vcf_filter = {
+	produce (myfile + ".filtered.vcf.gz"){
+		preserve("*.filtered.vcf.gz"){
+		exec """
+			/data/apps/vcflib/bin/vcffilter -f 'DP > $MIN_DEPTH & QUAL > $MIN_QUAL' $input.gz | /data/apps/bgzip > $output.gz
+		"""
+		}
+	}
+}
+
+annovar_prepare = {
+	produce (myfile + ".avinput"){
+		exec """
+			/data/apps/annovar/convert2annovar.pl --includeinfo --allsample --withfreq --format vcf4 $input.gz > $output.avinput
+		"""
+	}
+}
+
+annovar_annotate = {
+                transform('.avinput') to ('.hg19_multianno.txt'){
+               // preserve("*.hg19_multianno.txt"){
+		exec """
+			/data/apps/annovar/table_annovar.pl $input.avinput /data/apps/annovar/humandb/ --buildver hg19 --out $output.txt.prefix.prefix --remove --protocol refGene,avsnp147,exac03,exac03nontcga,1000g2015aug_all,1000g2015aug_eas,clinvar_20170130,cosmic80,dbnsfp33a,mcap,SEC_1100CleanSamples_21062017,intervar_20170202,dbscsnv11,revel,PRISMinterpretation -operation g,f,f,f,f,f,f,f,f,f,f,f,f,f,f -nastring . -otherinfo -thread $NUM_CPUS
+                """
+		//}
+	}
+}
+
+annovar_compress = {
+	produce(myfile + ".annotations.gz"){
+		preserve("*.annotations.gz"){
+		exec """
+			gzip -c $input.txt > $output.gz
+		"""
+		}
+	}
+}
+
+clean_up = {
+	cleanup "*raw.bam"
+}
+
+//qualimap qc bam file
+BAMQC = {
+	produce (myfile + ".pdf"){
+	output.dir = "."	
+	transform(".rmdup.bam") to (".pdf"){	
+	exec """
+		/data/apps/qualimap_v2.2.1/qualimap bamqc -bam $input.rmdup.bam --java-mem-size=12G -outfile $output.pdf -outdir $output.dir -outformat pdf
+	"""}
+}
+}
+
+Bpipe.run {align + markdup + freebayes + index_vcf + vcf_filter + index_vcf + annovar_prepare + annovar_annotate + annovar_compress + clean_up + BAMQC}
+
+

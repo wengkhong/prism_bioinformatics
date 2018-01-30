@@ -1,0 +1,292 @@
+REFERENCE="/data/share/refs/hs37d5.fa"
+TARGET_REGIONS="/data/share/SureSelect_V6_hs37d5.bed"
+TARGET_REGIONS_bed6="/data/share/SureSelect_V6_hs37d5.bed6.bed"
+DBSNP = "/data/share/GATK_Bundle/b37/dbsnp_138.b37.vcf"
+HAPMAP = "/data/share/GATK_Bundle/b37/hapmap_3.3.b37.vcf"
+OMNI = "/data/share/GATK_Bundle/b37/1000G_omni2.5.b37.vcf"
+ONET = "/data/share/GATK_Bundle/b37/1000G_phase3_v4_20130502.sites.vcf"
+MILLS_GOLDSTD = "/data/share/GATK_Bundle/b37/Mills_and_1000G_gold_standard.indels.b37.vcf"
+GATK = "/data/apps/GenomeAnalysisTK.jar"
+RG="@RG\tID:T1\tLB:LIB1\tSM:T1\tPL:ILLUMINA"
+
+LOG="pipeline.log"
+NUM_CPUS=32
+MIN_DEPTH = 9
+MIN_QUAL = 30
+
+align = {
+        produce(myfile + ".raw.bam"){
+        exec """
+                /data/apps/bwa mem -R '@RG\tID:$myfile\tLB:LIB1\tSM:$myfile\tPL:ILLUMINA' -t$NUM_CPUS $REFERENCE $input1 $input2 | /data/apps/sambamba view -t$NUM_CPUS -S -f bam /dev/stdin | /data/apps/sambamba sort -t$NUM_CPUS /dev/stdin -o $output.bam
+        """}
+}
+
+markdup = {
+        produce(myfile + ".rmdup.bam"){
+                preserve("*.rmdup.bam"){
+                exec """
+                        /data/apps/sambamba markdup -t$NUM_CPUS $input.bam $output.bam
+                """}
+        }
+}
+
+GATK_baserecal = {
+		produce(myfile + ".recal.table"){
+			exec """
+					java -jar $GATK
+					-T BaseRecalibrator
+					-R $REFERENCE
+					-I $input.bam
+					-L $TARGET_REGIONS
+					-knownSites $DBSNP
+					-knownSites $MILLS_GOLDSTD
+					-o $output.table
+			"""
+			forward input
+			}
+}
+
+//generate recalibrated bam file 
+GATK_printreads = {
+		produce(myfile + ".recalibrated.bam"){
+			exec """
+					java -jar $GATK
+					-T PrintReads
+					-R $REFERENCE
+					-I $input.bam
+					-BQSR $input.table
+					-o $output.bam
+			"""}
+}
+
+
+GATK_haplotypecaller = {
+		produce (myfile + "haplotype.g.vcf"){
+		exec """
+				java -jar $GATK
+				-T HaplotypeCaller
+				-R $REFERENCE
+				-I $input.bam
+				--emitRefConfidence GVCF
+				--dbsnp $DBSNP
+				-L $TARGET_REGIONS
+				-o $output.g.vcf
+		"""}
+}
+
+//convert gvcf to vcf
+GATK_genotypeGVCF = {
+		produce (myfile + ".genotypegvcf.vcf"){
+		exec """
+				java -jar $GATK
+   				-T GenotypeGVCFs
+   				-R $REFERENCE
+   				--variant $input.g.vcf 
+   				-o $output.vcf
+		"""}
+}
+
+//-------------------------------------- Single Exome File --------------------------------------
+GATK_extractSNP = {
+		produce (myfile + 'raw_snps.snp'){
+		exec """
+				java -jar $GATK 
+    				-T SelectVariants 
+    				-R $REFERENCE 
+    				-V $input.vcf 
+    				-selectType SNP  
+    				-o $output.snp 
+		"""
+		forward input}	
+}
+
+GATK_extractINDEL = {
+		produce (myfile + 'raw_indels.indel'){
+		exec """
+
+				java -jar $GATK 
+    				-T SelectVariants 
+    				-R $REFERENCE 
+    				-V $input.vcf 
+    				-selectType INDEL  
+    				-o $output.indel
+		"""}
+}
+
+
+GATK_applyFilterSNP = {
+                produce (myfile + '.filtered_snps.vcf'){
+                exec """
+                                java -jar $GATK 
+    				-T VariantFiltration 
+    				-R $REFERENCE
+    				-V $input.snp 
+    				--filterExpression "QD < 2.0 || FS > 60.0 || MQ < 40.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0"
+    				--filterName "my_snp_filter"
+    				-o $output.vcf
+
+                """}
+}
+
+GATK_applyFilterINDEL = {
+		produce (myfile + '.filtered_indels.vcf'){
+		exec """
+
+				java -jar $GATK
+    				-T VariantFiltration 
+    				-R $REFERENCE
+    				-V $input.indel 
+    				--filterExpression "QD < 2.0 || FS > 200.0 || ReadPosRankSum < -20.0"
+    				--filterName "my_indel_filter"
+    				-o $output.vcf
+		"""}
+}
+
+GATK_merge = {
+		produce (myfile + 'combined.vcf'){
+		exec """
+				java -jar $GATK
+				-T CombineVariants
+				-R $REFERENCE
+				--variant:indel $input.filtered_indels.vcf
+				--variant:snv $input.filtered_snps.vcf
+				--out $output.vcf
+				--genotypemergeoption UNSORTED
+		"""}
+}
+
+// --------------------------------------- Multiple Exome Files --------------------------------------------------
+GATK_buildSNPrecalmodel = {
+		produce (myfile + ".recalibrate_SNP.recal", ,myfile + ".recalibrate_SNP.tranches", myfile + ".recalibrate_SNP_plots.R"){
+		exec """
+				java -jar $GATK 
+				-T VariantRecalibrator
+				-R $REFERENCE
+				-input $input.vcf 
+				-resource:hapmap,known=false,training=true,truth=true,prior=15.0 $HAPMAP
+				-resource:omni,known=false,training=true,truth=true,prior=12.0 $OMNI
+				-resource:1000G,known=false,training=true,truth=false,prior=10.0 $ONET 
+				-resource:dbsnp,known=true,training=false,truth=false,prior=2.0 $DBSNP
+				-an DP 
+				-an QD
+				-an FS
+				-an SOR
+				-an MQ
+				-an MQRankSum
+				-an ReadPosRankSum
+				-mode SNP
+				-tranche 100.0 -tranche 99.9 -tranche 99.0 -tranche 90.0
+				-recalFile $output1.recal 
+				-tranchesFile $output2.tranches
+				-rscriptFile $output3.R
+		"""
+		forward input
+		}
+}
+
+GATK_applySNPrecalmodel = {
+		produce(myfile + ".recalibrated_snps_raw_indels.vcf"){
+		exec """
+				java -jar $GATK
+				-T ApplyRecalibration
+				-R $REFERENCE
+				-input $input.vcf
+				-mode SNP
+				--ts_filter_level 99.0
+				-recalFile $input1.recalibrate_SNP.recal
+				-tranchesFile $input2.recalibrate_SNP.tranches
+				-o $output.vcf
+		"""
+		}
+}
+
+GATK_buildINDELrecalmodel = {
+		produce (myfile + ".recalibrate_INDEL.recal", myfile + ".recalibrate_INDEL.tranches", myfile + ".recalibrate_INDEL_plots.R"){
+		exec """
+				java -jar $GATK
+				-T VariantRecalibrator
+				-R $REFERENCE
+				-input $input.vcf
+				-resource:mills,known=false,training=true,truth=true,prior=12.0 $MILLS_GOLDSTD
+				-resource:dbsnp,known=true,training=false,truth=false,prior=2.0 $DBSNP
+				-an QD
+				-an DP
+				-an FS
+				-an SOR
+				-an MQRankSum
+				-an ReadPosRankSum
+				-an InbreedingCoeff
+				-mode INDEL
+				-tranche 100.0 -tranche 99.9 -tranche 99.0 -tranche 90.0
+				--maxGaussians 4
+				-recalFile $output1.recal
+				-tranchesFile $output2.tranches
+				-rscriptFile $output3.R 
+		"""
+		forward input
+		}
+}
+
+GATK_applyINDELrecalmodel = {
+		produce(myfile + ".recalibrated_variants.vcf"){
+		exec """
+				java -jar $GATK
+				-T ApplyRecalibration
+				-R $REFERENCE
+				-input $input.vcf
+				-mode SNP
+				--ts_filter_level 99.0
+				-recalFile $input1.recalibrate_INDEL.recal
+				-tranchesFile $input2.recalibrate_INDEL.tranches
+				-o $output.vcf
+		"""
+		}
+}
+
+//Annovar annotation
+annovar_prepare = {
+	produce (myfile + ".mcap.avinput"){
+		exec """
+			/data/apps/annovar/convert2annovar.pl --includeinfo --allsample --withfreq --format vcf4 $input.vcf > $output.avinput
+		"""
+	}
+}
+
+annovar_annotate = {
+                transform('.avinput') to ('.hg19_multianno.txt'){
+               // preserve("*.hg19_multianno.txt"){
+		exec """
+			/data/apps/annovar/table_annovar.pl $input.avinput /data/apps/annovar/humandb/ --buildver hg19 --out $output.txt.prefix.prefix --remove --protocol refGene,avsnp147,exac03,exac03nontcga,1000g2015aug_all,clinvar_20160302,cosmic70,dbnsfp30a,mcap -operation g,f,f,f,f,f,f,f,f -nastring . -otherinfo -thread $NUM_CPUS
+                """
+		//}
+	}
+}
+
+annovar_compress = {
+	produce(myfile + ".annotations.gz"){
+		preserve("*.mcap.annotations.gz"){
+		exec """
+			gzip -c $input.txt > $output.gz
+		"""
+		}
+	}
+}
+
+//qualimap qc bam file
+BAMQC = {
+	produce (myfile + ".pdf"){
+	//output.dir = "/home/jingxian/S00026_GekSanPanel/gatk_pipeline/BAMQCresult"	
+	output.dir = "."	
+	transform(".rmdup.bam") to (".pdf"){	
+	exec """
+		/data/apps/qualimap_v2.2.1/qualimap bamqc -bam $input.rmdup.bam -gff /data/share/SureSelect_V6_hs37d5_bed6.bed -outfile $output.pdf -outdir $output.dir -outformat pdf
+	"""}
+}
+}
+
+clean_up = {
+	cleanup "*raw.bam"
+}
+
+Bpipe.run {align + markdup + GATK_haplotypecaller + GATK_genotypeGVCF + GATK_extractSNP + GATK_extractINDEL + GATK_applyFilterSNP + GATK_applyFilterINDEL + GATK_merge }
+ 

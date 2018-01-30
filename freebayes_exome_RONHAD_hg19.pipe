@@ -1,0 +1,30 @@
+REFERENCE="/data/share/refs/hg19/hg19.fa"
+TARGET_REGIONS="/data/share/SureSelect_V4_Padded_sorted.bed"
+LOG="pipeline.log"
+NUM_CPUS=32
+MIN_DEPTH = 9
+MIN_QUAL = 30
+
+align = {
+	produce(myfile + ".raw.bam"){
+	exec """
+		/data/apps/bwa mem -R '@RG\tID:$myfile\tLB:LIB1\tSM:$myfile\tPL:ILLUMINA' -t$NUM_CPUS $REFERENCE $input1 $input2 | /data/apps/sambamba view -t$NUM_CPUS -S -f bam /dev/stdin | /data/apps/sambamba sort -t$NUM_CPUS /dev/stdin -o $output.bam
+	"""}
+}
+
+
+
+markdup = {
+	produce(myfile + ".rmdup.bam"){
+		preserve("*.rmdup.bam"){
+		exec """
+			/data/apps/sambamba markdup -t$NUM_CPUS $input.bam $output.bam
+		"""}
+	}
+}
+
+
+Bpipe.run {align + markdup}
+//Bpipe.run {annovar_annotate + annovar_compress}
+
+

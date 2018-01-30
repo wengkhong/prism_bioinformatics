@@ -1,0 +1,50 @@
+REFERENCE="/data/share/refs/hg19/hg19.fa"
+LOG="pipeline.log"
+NUM_CPUS = 10
+MIN_DEPTH = 9
+MIN_QUAL = 30
+
+freebayes_parallel = {
+	produce (myfile + ".rawfreebayes.vcf.gz"){
+		preserve("*vcf.gz"){
+		exec """
+			/data/apps/freebayes-1.1.0/scripts/freebayes-parallel <(/data/apps/freebayes-1.1.0/scripts/fasta_generate_regions.py /data/share/refs/hg19/hg19.fa.fai 100000) $NUM_CPUS -f $REFERENCE $input | /data/apps/bgzip > $output.gz
+		"""
+		}
+	}
+}
+
+process = {
+	produce (myfile + "raw.vcf.gz"){
+		preserve("*vcf.gz"){
+		exec """
+			zcat $input.gz | /data/apps/vcflib/bin/vcfallelicprimitives -kg | /data/apps/vt/vt normalize -q -r $REFERENCE - | /data/apps/vt/vt uniq - | /data/apps/bgzip > $output.gz
+		"""
+		}
+	}
+}
+
+index_vcf = {
+	preserve("*.tbi"){
+	exec """
+		/data/apps/tabix -f $input.gz
+	"""
+	forward input
+	}
+}
+
+vcf_filter = {
+	produce (myfile + ".filtered.vcf.gz"){
+		preserve("*.filtered.vcf.gz"){
+		exec """
+			/data/apps/vcflib/bin/vcffilter -f 'DP > $MIN_DEPTH & QUAL > $MIN_QUAL' $input.gz | /data/apps/bgzip > $output.gz
+		"""
+		}
+	}
+}
+
+
+Bpipe.run {freebayes_parallel + process + index_vcf + vcf_filter + index_vcf}
+
+
+

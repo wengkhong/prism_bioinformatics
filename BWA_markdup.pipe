@@ -1,0 +1,35 @@
+REFERENCE="/data/share/refs/hs37d5.fa"
+TARGET_REGIONS="/data/share/SureSelect_V6_hs37d5.bed"
+sambamba="/data/apps/sambamba_v0.5.8/sambamba_v0.5.8"
+LOG="pipeline.log"
+NUM_CPUS=20
+MIN_DEPTH = 9
+MIN_QUAL = 30
+
+align = {
+	produce(myfile + ".raw.bam"){
+	exec """
+		/data/apps/bwa mem -R '@RG\tID:$myfile\tLB:$LIB\tSM:$myfile\tPL:ILLUMINA' -t$NUM_CPUS $REFERENCE $input1 $input2 | $sambamba view -t$NUM_CPUS -S -f bam /dev/stdin | $sambamba sort -t$NUM_CPUS /dev/stdin -o $output.bam
+	"""}
+}
+
+
+markdup = {
+	produce(myfile + ".rmdup.bam"){
+		preserve("*.rmdup.bam"){
+		exec """
+			$sambamba markdup -t$NUM_CPUS $input.bam $output.bam
+		"""}
+	}
+}
+
+clean_up_bam = {
+	cleanup "*raw.bam"
+}
+
+clean_up_bai = {
+	cleanup "*raw.bam.bai"
+}
+
+
+Bpipe.run {align + markdup + clean_up_bam + clean_up_bai}

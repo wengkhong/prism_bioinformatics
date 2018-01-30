@@ -1,0 +1,5 @@
+StrelkaOnly = {
+	exec "sh /home/jingxian/Scripts/StrelkaOnly.sh $input1 $input2"
+}
+
+Bpipe.run{StrelkaOnly}

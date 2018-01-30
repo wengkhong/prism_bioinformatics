@@ -1,0 +1,5 @@
+Strelka_controlFreec = {
+	exec "sh /home/jingxian/Scripts/Strelka_ControlFreec.sh $input1 $input2"
+}
+
+Bpipe.run{Strelka_controlFreec}

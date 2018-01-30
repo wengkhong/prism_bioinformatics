@@ -1,0 +1,5 @@
+Manta = {
+	exec "sh /home/jingxian/Scripts/manta.sh $input1"
+}
+
+Bpipe.run{Manta}
