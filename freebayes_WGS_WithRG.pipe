@@ -25,7 +25,7 @@ freebayes = {
 	produce (myfile + "raw.vcf.gz"){
 		preserve("*vcf.gz"){
 		exec """
-			/data/apps/freebayes -f $REFERENCE $input.bam | /data/apps/vcflib/bin/vcfallelicprimitives -kg | /data/apps/vt/vt normalize -q -r $REFERENCE - | /data/apps/vt/vt uniq - | /data/apps/bgzip > $output.gz
+			/data/apps/freebayes -f $REFERENCE $input.bam | /data/apps/vt/vt decompose -s - | /data/apps/vt/vt normalize -q -r $REFERENCE - | /data/apps/vt/vt uniq - | /data/apps/bgzip > $output.gz
 		"""
 		}
 	}
